@@ -1,2 +1,2 @@
 # Funannotate 
-Project template for doing a funannotate annotation set. I used the template to generate the code I used for this project (see pipeline)
+I used the funannotate template to generate the code I used for this project (see pipeline)
