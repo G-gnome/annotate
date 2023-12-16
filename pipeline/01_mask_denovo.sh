@@ -1,5 +1,7 @@
-#!/usr/bin/bash -l
-#SBATCH -p batch --time 2-0:00:00 --ntasks 8 --nodes 1 --mem 24G --out logs/mask.%a.log
+#!/bin/bash -l
+#SBATCH -p batch -N 1 -c 16 --mem 24gb --out logs/annotate_mask.%a.log
+
+module unload miniconda3
 
 CPU=1
 if [ $SLURM_CPUS_ON_NODE ]; then
@@ -7,60 +9,64 @@ if [ $SLURM_CPUS_ON_NODE ]; then
 fi
 
 INDIR=genomes
-OUTDIR=genomes
+OUTDIR=genomes_to_annotate
+MASKDIR=RepeatMasker_run
+SAMPLES=metadata.tsv
+RMLIBFOLDER=repeat_library
+mkdir -p $RMLIBFOLDER $MASKDIR $OUTDIR
+RMLIBFOLDER=$(realpath $RMLIBFOLDER)
 
-mkdir -p repeat_library
-
-SAMPFILE=samples.csv
 N=${SLURM_ARRAY_TASK_ID}
-
-if [ ! $N ]; then
+if [ -z $N ]; then
     N=$1
-    if [ ! $N ]; then
+    if [ -z $N ]; then
         echo "need to provide a number by --array or cmdline"
         exit
     fi
 fi
-MAX=$(wc -l $SAMPFILE | awk '{print $1}')
-if [ $N -gt $(expr $MAX) ]; then
-    MAXSMALL=$(expr $MAX)
-    echo "$N is too big, only $MAXSMALL lines in $SAMPFILE"
+MAX=$(wc -l $SAMPLES | awk '{print $1}')
+if [ $N -gt $MAX ]; then
+    echo "$N is too big, only $MAX lines in $SAMPLES"
     exit
 fi
 
-IFS=,
-tail -n +2 $SAMPFILE | sed -n ${N}p | while read SPECIES STRAIN PHYLUM BIOPROJECT BIOSAMPLE LOCUS
+IFS=$'\t'
+tail -n +2 $SAMPLES | sed -n ${N}p | while read ASSEMBLY ACCESSION ORGANISM_NAME _ STRAIN _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
 do
-  name=$(echo -n ${SPECIES}_${STRAIN} | perl -p -e 's/\s+/_/g')
-  if [ ! -f $INDIR/${name}.sorted.fasta ]; then
-     echo "Cannot find $name in $INDIR - may not have been run yet"
-     exit
-  fi
-  echo "$name"
-  
-  if [ ! -f $OUTDIR/${name}.masked.fasta ]; then
-     module unload perl
-     module unload python
-     module unload miniconda2
-     module unload anaconda3
-     module load funannotate/1.8.2
-     export AUGUSTUS_CONFIG_PATH=$(realpath lib/augustus/3.3/config)
-     if [ -f repeat_library/${name}.repeatmodeler-library.fasta ]; then
-    	  LIBRARY=$(realpath repeat_library/${name}.repeatmodeler-library.fasta)
-     fi
-     echo "LIBRARY is $LIBRARY"
-     mkdir $name.mask.$$
-     pushd $name.mask.$$
-     if [ ! -z $LIBRARY ]; then
-    	 funannotate mask --cpus $CPU -i ../$INDIR/${name}.sorted.fasta -o ../$OUTDIR/${name}.masked.fasta -l $LIBRARY --method repeatmodeler
-     else
-       funannotate mask --cpus $CPU -i ../$INDIR/${name}.sorted.fasta -o ../$OUTDIR/${name}.masked.fasta --method repeatmodeler
-       mv repeatmodeler-library.*.fasta ../repeat_library/${name}.repeatmodeler-library.fasta
-       mv funannotate-mask.log ../logs/masklog_long.$name.log
-     fi
-     popd
-     rmdir $name.mask.$$
-  else
-     echo "Skipping ${name} as masked already"
-  fi
+    # Replace spaces with underscores in variables
+    SANITIZED_ASSEMBLY=$(echo "$ASSEMBLY" | tr ' ' '_')
+    SANITIZED_ORGANISM_NAME=$(echo "$ORGANISM_NAME" | tr ' ' '_')
+    name=$(echo -n ${SANITIZED_ORGANISM_NAME}_${SANITIZED_ASSEMBLY} | perl -p -e 's/\s+/_/g')
+
+    if [ ! -f $INDIR/${name}.sorted.fasta ]; then
+        echo "Cannot find $name.fasta in $INDIR - may not have been run yet"
+        exit
+    fi
+
+    OUTNAME=$OUTDIR/${name}.masked.fasta
+    if [ ! -s $OUTDIR/${name}.masked.fasta ]; then
+        mkdir -p $MASKDIR/${name}
+        GENOME=$(realpath $INDIR/${name}.sorted.fasta)
+        if [ ! -f $MASKDIR/${name}/${name}.fasta.masked ]; then
+            LIBRARY=$RMLIBFOLDER/$name.repeatmodeler.lib
+            if [ ! -f $LIBRARY ]; then
+                module load RepeatModeler
+                pushd $MASKDIR/${name}
+                BuildDatabase -name $name $GENOME
+                RepeatModeler -threads $CPU -database $name -LTRStruct
+                cp */consensi.fa.classified $LIBRARY
+                cp */families-classified.stk $RMLIBFOLDER/$name.repeatmodeler.stk
+                popd
+            fi
+
+            if [ -f $LIBRARY ]; then
+                module load RepeatMasker
+                RepeatMasker -e ncbi -xsmall -s -pa $CPU -lib $LIBRARY -dir $MASKDIR/${name} -gff $INDIR/${name}.sorted.fasta
+            fi
+        fi
+
+        cp $MASKDIR/${name}/${name}.sorted.fasta.masked $OUTNAME
+    else
+        echo "Skipping ${name} as masked file already exists"
+    fi
 done
