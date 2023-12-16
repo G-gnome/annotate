@@ -8,8 +8,10 @@ CPU=1
 if [ ! -z $SLURM_CPUS_ON_NODE ]; then
   CPU=$SLURM_CPUS_ON_NODE
 fi
-OUTDIR=annotate
-SAMPFILE=samples.csv
+OUTDIR=antismash
+SAMPFILE=metadata.tsv
+INDIR=annotation
+INPUTFOLDER=predict_results
 N=${SLURM_ARRAY_TASK_ID}
 if [ ! $N ]; then
   N=$1
@@ -25,28 +27,25 @@ if [ $N -gt $MAX ]; then
   exit
 fi
 
-INPUTFOLDER=predict_results
-
-IFS=,
-tail -n +2 $SAMPFILE | sed -n ${N}p | while read SPECIES STRAIN PHYLUM BIOSAMPLE BIOPROJECT LOCUSTAG
+IFS=$'\t'
+tail -n +2 $SAMPFILE | sed -n ${N}p | while read ASSEMBLY ACCESSION ORGANISM_NAME _ STRAIN _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
 do
-  BASE=$(echo -n "$SPECIES $STRAIN" | perl -p -e 's/\s+/_/g')
-  name=$BASE
-  STRAIN_NOSPACE=$(echo -n "$STRAIN" | perl -p -e 's/\s+/_/g')
-  echo "$BASE"
-  MASKED=$(realpath $INDIR/$BASE.masked.fasta)
-
-  if [ ! -d $OUTDIR/$name ]; then
+    # Replace spaces with underscores in variables
+    SANITIZED_ORGANISM_NAME=$(echo "$ORGANISM_NAME" | tr ' ' '_')
+    SANITIZED_ASSEMBLY=$(echo "$ASSEMBLY" | tr ' ' '_')
+    name=$(echo -n ${SANITIZED_ORGANISM_NAME}_${SANITIZED_ASSEMBLY} | perl -p -e 's/\s+/_/g')
+  if [ ! -d $INDIR/$name ]; then
     echo "No annotation dir for ${name}"
     exit
   fi
-  echo "processing $OUTDIR/$name"
+  echo "processing $INDIR/$name"
   if [[ ! -d $OUTDIR/$name/antismash_local && ! -s $OUTDIR/$name/antismash_local/index.html ]]; then
-    #	antismash --taxon fungi --output-dir $OUTDIR/$name/antismash_local  --genefinding-tool none \
+    #   antismash --taxon fungi --output-dir $OUTDIR/$name/antismash_local  --genefinding-tool none \
       #    --asf --fullhmmer --cassis --clusterhmmer --asf --cb-general --pfam2go --cb-subclusters --cb-knownclusters -c $CPU \
       #    $OUTDIR/$name/$INPUTFOLDER/*.gbk
+    mkdir -p $OUTDIR/$name/antismash_local
     time antismash --taxon fungi --output-dir $OUTDIR/$name/antismash_local \
       --genefinding-tool none --fullhmmer --clusterhmmer --cb-general \
-      --pfam2go -c $CPU $OUTDIR/$name/$INPUTFOLDER/*.gbk
+      --pfam2go -c $CPU $INDIR/$name/$INPUTFOLDER/*.gbk
   fi
 done
